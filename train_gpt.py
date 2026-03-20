@@ -1335,6 +1335,16 @@ def main() -> None:
                     "train/train_loss": train_loss_value,
                     "train/train_time_ms": float(approx_training_time_ms),
                     "train/step_avg_ms": float(train_step_avg_ms),
+                    # Log LR used for the just-completed optimizer step.
+                    "lr/lr_scale": float(scale),
+                    "lr/token_lr": float(optimizer_tok.param_groups[0]["lr"]),
+                    "lr/matrix_lr": float(sum(g["lr"] for g in optimizer_muon.param_groups) / max(len(optimizer_muon.param_groups), 1)),
+                    "lr/scalar_lr": float(optimizer_scalar.param_groups[0]["lr"]),
+                    **(
+                        {"lr/head_lr": float(optimizer_head.param_groups[0]["lr"])}
+                        if base_model.lm_head is not None
+                        else {}
+                    ),
                 },
                 step,
             )

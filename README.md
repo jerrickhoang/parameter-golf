@@ -137,7 +137,7 @@ To log scalars to a W&B dashboard (open in the W&B cloud UI at [app.wandb.ai](ht
 
 ```bash
 wandb login
-WANDB_PROJECT=parameter-golf WANDB_ENTITY=your_name \
+WANDB_PROJECT=parameter-golf WANDB_ENTITY=jerrickhoang \
 RUN_ID=baseline_sp1024 \
 DATA_PATH=./data/datasets/fineweb10B_sp1024/ \
 TOKENIZER_PATH=./data/tokenizers/fineweb_1024_bpe.model \
