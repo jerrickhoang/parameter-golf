@@ -1013,6 +1013,47 @@ def main() -> None:
             with open(logfile, "a", encoding="utf-8") as f:
                 print(msg, file=f)
 
+    wandb_run = None
+    wandb = None
+    if master_process and os.environ.get("WANDB_PROJECT"):
+        import wandb as _wandb
+
+        wandb = _wandb
+        wandb_project = os.environ["WANDB_PROJECT"]
+        wandb_run_name = os.environ.get("WANDB_RUN_NAME", args.run_id)
+
+        wandb_init_kwargs: dict[str, object] = {
+            "project": wandb_project,
+            "name": wandb_run_name,
+            "config": {
+                "run_id": args.run_id,
+                "seed": args.seed,
+                "model_dim": args.model_dim,
+                "num_layers": args.num_layers,
+                "num_heads": args.num_heads,
+                "num_kv_heads": args.num_kv_heads,
+                "mlp_mult": args.mlp_mult,
+                "train_seq_len": args.train_seq_len,
+                "train_batch_tokens": args.train_batch_tokens,
+                "iterations": args.iterations,
+                "warmup_steps": args.warmup_steps,
+                "val_loss_every": args.val_loss_every,
+                "embed_lr": args.embed_lr,
+                "head_lr": args.head_lr,
+                "matrix_lr": args.matrix_lr,
+                "scalar_lr": args.scalar_lr,
+            },
+        }
+        if os.environ.get("WANDB_ENTITY"):
+            wandb_init_kwargs["entity"] = os.environ["WANDB_ENTITY"]
+
+        wandb_run = wandb.init(**wandb_init_kwargs)
+
+    def wandb_log(metrics: dict[str, float], step: int) -> None:
+        if wandb_run is None or wandb is None:
+            return
+        wandb.log(metrics, step=step)
+
     log0(code, console=False)
     log0("=" * 100, console=False)
     log0(f"Running Python {sys.version}", console=False)
@@ -1225,6 +1266,17 @@ def main() -> None:
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
                 f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms"
             )
+            if master_process:
+                val_step_avg_ms = training_time_ms / max(step, 1)
+                wandb_log(
+                    {
+                        "val/val_loss": float(val_loss),
+                        "val/val_bpb": float(val_bpb),
+                        "val/val_time_ms": float(training_time_ms),
+                        "val/step_avg_ms": float(val_step_avg_ms),
+                    },
+                    step,
+                )
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
@@ -1272,9 +1324,19 @@ def main() -> None:
             and (step <= 10 or step % args.train_log_every == 0 or stop_after_step is not None)
         )
         if should_log_train:
+            train_loss_value = float(train_loss.item())
+            train_step_avg_ms = approx_training_time_ms / max(step, 1)
             log0(
-                f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
-                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
+                f"step:{step}/{args.iterations} train_loss:{train_loss_value:.4f} "
+                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{train_step_avg_ms:.2f}ms"
+            )
+            wandb_log(
+                {
+                    "train/train_loss": train_loss_value,
+                    "train/train_time_ms": float(approx_training_time_ms),
+                    "train/step_avg_ms": float(train_step_avg_ms),
+                },
+                step,
             )
 
         # Needed to sync whether we've reached the wallclock cap.
@@ -1349,6 +1411,7 @@ def main() -> None:
         f"eval_time:{1000.0 * (time.perf_counter() - t_qeval):.0f}ms"
     )
     log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
+    wandb_log({"final/quant_val_loss": float(q_val_loss), "final/quant_val_bpb": float(q_val_bpb)}, step)
 
     # LoRA test-time training evaluation (the competition score)
     torch._dynamo.reset()
@@ -1363,6 +1426,13 @@ def main() -> None:
         f"final_int8_ttt_lora val_loss:{ttt_val_loss:.4f} val_bpb:{ttt_val_bpb:.4f} "
         f"eval_time:{1000.0 * (time.perf_counter() - t_ttt):.0f}ms"
     )
+    wandb_log(
+        {"final/ttt_lora_val_loss": float(ttt_val_loss), "final/ttt_lora_val_bpb": float(ttt_val_bpb)},
+        step,
+    )
+
+    if master_process and wandb is not None:
+        wandb.finish()
 
     if distributed:
         dist.destroy_process_group()
